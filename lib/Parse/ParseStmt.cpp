@@ -2041,21 +2041,47 @@ ParserResult<Stmt> Parser::parseStmtGuard() {
             BraceStmt::create(Context, EndLoc, {}, EndLoc, /*implicit=*/true)));
   };
 
-  if (Tok.isAny(tok::l_brace, tok::kw_else)) {
-    SourceLoc LBraceLoc = Tok.getLoc();
-    diagnose(GuardLoc, diag::missing_condition_after_guard)
-      .highlight(SourceRange(GuardLoc, LBraceLoc));
-    SmallVector<StmtConditionElement, 1> ConditionElems;
-    ConditionElems.emplace_back(new (Context) ErrorExpr(LBraceLoc));
-    Condition = Context.AllocateCopy(ConditionElems);
-  } else {
-    Status |= parseStmtCondition(Condition, diag::expected_condition_guard,
-                                 StmtKind::Guard);
-    if (Status.isErrorOrHasCompletion()) {
-      // FIXME: better recovery
+if (Tok.isAny(tok::l_brace, tok::kw_else)) {
+  SourceLoc LBraceLoc = Tok.getLoc();
+  diagnose(GuardLoc, diag::missing_condition_after_guard)
+    .highlight(SourceRange(GuardLoc, LBraceLoc));
+
+  SmallVector<StmtConditionElement, 1> ConditionElems;
+  ConditionElems.emplace_back(new (Context) ErrorExpr(LBraceLoc));
+  Condition = Context.AllocateCopy(ConditionElems);
+
+} else {
+  Status |= parseStmtCondition(Condition, diag::expected_condition_guard,
+                               StmtKind::Guard);
+  if (Status.isErrorOrHasCompletion()) {
+    if (Condition.empty()) {
+      SmallVector<StmtConditionElement, 1> ConditionElems;
+      ConditionElems.emplace_back(new (Context) ErrorExpr(GuardLoc));
+      Condition = Context.AllocateCopy(ConditionElems);
+    }
+    if (!Tok.is(tok::kw_else) && !Tok.is(tok::l_brace))
+      skipUntil(tok::kw_else, tok::l_brace, tok::r_brace, tok::eof);
+    if (consumeIf(tok::kw_else)) {
+      Body = parseBraceItemList(diag::expected_lbrace_after_guard);
+      Status |= Body;
+      if (Body.isNonNull()) {
+        return makeParserResult(Status, new (Context)
+                                GuardStmt(GuardLoc, Condition, Body.get()));
+      }
       return recoverWithCond(Status, Condition);
     }
+    if (Tok.is(tok::l_brace)) {
+      Body = parseBraceItemList(diag::expected_lbrace_after_guard);
+      Status |= Body;
+      if (Body.isNonNull()) {
+        return makeParserResult(Status, new (Context)
+                                GuardStmt(GuardLoc, Condition, Body.get()));
+      }
+      return recoverWithCond(Status, Condition);
+    }
+    return recoverWithCond(Status, Condition);
   }
+}
 
   // Parse the 'else'.  If it is missing, and if the following token isn't a {
   // then the parser is hopelessly lost - just give up instead of spewing.
